@@ -21,7 +21,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- GESTION DE LA MÉMOIRE (SESSION STATE) ---
+# --- GESTION DE LA MÉMOIRE ---
 if 'resultat' not in st.session_state:
     st.session_state.resultat = None
 if 'coords_points' not in st.session_state:
@@ -31,22 +31,93 @@ if 'marge_erreur' not in st.session_state:
 
 # --- EN-TÊTE ---
 col_logo, col_title = st.columns([1, 4])
-
 with col_logo:
     try:
         image = Image.open("hades.png") 
         st.image(image, width=100)
     except FileNotFoundError:
         st.warning("Logo?")
-
 with col_title:
     st.title("Chope ton Bat")
-
 st.markdown("### Système de Triangulation Tactique")
 
-# --- FONCTIONS ---
+# --- OUTILS MATHÉMATIQUES (NOUVEAU MOTEUR) ---
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """Calcule la distance réelle en km entre deux points GPS"""
+    R = 6371  # Rayon de la Terre
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+def trilateration_optimize(p1, r1, p2, r2, p3, r3):
+    """
+    Algorithme de minimisation d'erreur (Chaud/Froid).
+    Cherche le point (lat, lon) qui minimise la différence entre
+    la distance calculée et la distance fournie (r1, r2, r3).
+    """
+    # 1. Point de départ : Moyenne approximative (Barycentre)
+    lat = (p1[0] + p2[0] + p3[0]) / 3
+    lon = (p1[1] + p2[1] + p3[1]) / 3
+    
+    # Paramètres d'apprentissage
+    step_size = 1.0  # On commence par des pas de 1 degré (environ 111km)
+    min_step = 0.00001 # Précision finale (~1 mètre)
+    
+    # Boucle d'optimisation
+    for i in range(2000): # Max 2000 essais
+        current_error = 0
+        
+        # On calcule l'erreur actuelle ("Combien de km je suis loin des cercles ?")
+        # Erreur quadratique : (DistanceRéelle - RayonVoulu)²
+        d1 = haversine_distance(lat, lon, p1[0], p1[1])
+        d2 = haversine_distance(lat, lon, p2[0], p2[1])
+        d3 = haversine_distance(lat, lon, p3[0], p3[1])
+        
+        current_error = (d1 - r1)**2 + (d2 - r2)**2 + (d3 - r3)**2
+        
+        # Si on est précis, on arrête
+        if step_size < min_step:
+            break
+            
+        # On teste les 4 directions (Nord, Sud, Est, Ouest)
+        best_lat, best_lon = lat, lon
+        best_err = current_error
+        found_better = False
+        
+        moves = [
+            (step_size, 0), (-step_size, 0),  # Latitude +/-
+            (0, step_size), (0, -step_size)   # Longitude +/-
+        ]
+        
+        for d_lat, d_lon in moves:
+            test_lat = lat + d_lat
+            test_lon = lon + d_lon
+            
+            # Calcul erreur du test
+            td1 = haversine_distance(test_lat, test_lon, p1[0], p1[1])
+            td2 = haversine_distance(test_lat, test_lon, p2[0], p2[1])
+            td3 = haversine_distance(test_lat, test_lon, p3[0], p3[1])
+            test_err = (td1 - r1)**2 + (td2 - r2)**2 + (td3 - r3)**2
+            
+            if test_err < best_err:
+                best_lat, best_lon = test_lat, test_lon
+                best_err = test_err
+                found_better = True
+
+        # Si on a trouvé mieux, on se déplace
+        if found_better:
+            lat, lon = best_lat, best_lon
+        else:
+            # Sinon, on réduit la taille des pas (on affine la recherche)
+            step_size /= 2.0
+
+    return lat, lon
+
 def get_coords(address):
-    geolocator = Nominatim(user_agent="triangulation_app_hades_v2")
+    geolocator = Nominatim(user_agent="triangulation_app_hades_v3")
     try:
         location = geolocator.geocode(address, timeout=10)
         if location:
@@ -56,41 +127,9 @@ def get_coords(address):
     except:
         return None
 
-def trilateration(p1, r1, p2, r2, p3, r3):
-    # Conversion degrés -> radians / XYZ
-    def latlon_to_xyz(lat, lon):
-        lat, lon = math.radians(lat), math.radians(lon)
-        R = 6371
-        x = R * math.cos(lat) * math.cos(lon)
-        y = R * math.cos(lat) * math.sin(lon)
-        z = R * math.sin(lat)
-        return x, y, z
-
-    def xyz_to_latlon(x, y, z):
-        R = math.sqrt(x**2 + y**2 + z**2)
-        lat = math.asin(z / R)
-        lon = math.atan2(y, x)
-        return math.degrees(lat), math.degrees(lon)
-
-    P1 = latlon_to_xyz(*p1)
-    P2 = latlon_to_xyz(*p2)
-    P3 = latlon_to_xyz(*p3)
-
-    # Pondération simple : plus le cercle est petit, plus il est précis (?)
-    # Ici on garde une pondération équilibrée inverse à la distance
-    weights = [1/r1, 1/r2, 1/r3]
-    total_weight = sum(weights)
-    
-    x = (P1[0]*weights[0] + P2[0]*weights[1] + P3[0]*weights[2]) / total_weight
-    y = (P1[1]*weights[0] + P2[1]*weights[1] + P3[1]*weights[2]) / total_weight
-    z = (P1[2]*weights[0] + P2[2]*weights[1] + P3[2]*weights[2]) / total_weight
-
-    return xyz_to_latlon(x, y, z)
-
 # --- FORMULAIRE ---
-# Ajout du slider pour la marge d'erreur
 st.markdown("#### Paramètres")
-marge = st.slider("Marge d'erreur / Précision (km)", 0.1, 5.0, 1.0, 0.1, help="Définit la largeur de la zone de recherche autour de la distance indiquée.")
+marge = st.slider("Marge d'erreur visuelle (km)", 0.1, 5.0, 1.0, 0.1)
 
 col1, col2 = st.columns([3, 1])
 addr1 = col1.text_input("Adresse 1", placeholder="Ex: Tour Eiffel, Paris")
@@ -107,13 +146,14 @@ dist3 = col6.number_input("Dist 3 (km)", min_value=0.1, format="%.2f")
 # --- ACTION ---
 if st.button("LANCER LA TRIANGULATION"):
     if addr1 and addr2 and addr3 and dist1 > 0 and dist2 > 0 and dist3 > 0:
-        with st.spinner('Calcul des coordonnées...'):
+        with st.spinner('Optimisation de la position en cours...'):
             c1 = get_coords(addr1)
             c2 = get_coords(addr2)
             c3 = get_coords(addr3)
 
             if c1 and c2 and c3:
-                final_pos = trilateration(c1, dist1, c2, dist2, c3, dist3)
+                # APPEL DU NOUVEAU CALCULATEUR
+                final_pos = trilateration_optimize(c1, dist1, c2, dist2, c3, dist3)
                 
                 # Mise à jour session
                 st.session_state.resultat = final_pos
@@ -134,34 +174,33 @@ if st.session_state.resultat is not None:
     points = st.session_state.coords_points
     marge_actuelle = st.session_state.marge_erreur
     
-    st.success(f"📍 Zone estimée centrée sur : {res[0]:.5f}, {res[1]:.5f}")
+    st.success(f"📍 Meilleure intersection trouvée : {res[0]:.5f}, {res[1]:.5f}")
     
-    m = folium.Map(location=res, zoom_start=12)
+    m = folium.Map(location=res, zoom_start=11) # Zoom un peu plus large par défaut
     
-    # Affichage des "Bandes" de recherche
+    # Affichage des "Bandes"
     for i, (pt, dist) in enumerate(points):
-        # Cercle MIN (Distance - marge)
+        # Cercle MIN
         r_min = max(0, dist - marge_actuelle) * 1000
-        folium.Circle(pt, radius=r_min, color="green", weight=1, fill=False, opacity=0.5, dash_array='5, 5').add_to(m)
+        folium.Circle(pt, radius=r_min, color="green", weight=1, fill=False, opacity=0.4, dash_array='5, 5').add_to(m)
         
-        # Cercle MAX (Distance + marge)
+        # Cercle MAX
         r_max = (dist + marge_actuelle) * 1000
-        folium.Circle(pt, radius=r_max, color="green", weight=1, fill=False, opacity=0.5, dash_array='5, 5').add_to(m)
+        folium.Circle(pt, radius=r_max, color="green", weight=1, fill=False, opacity=0.4, dash_array='5, 5').add_to(m)
 
-        # Cercle EXACT (Ligne pleine)
+        # Cercle EXACT (Distance cible)
         folium.Circle(pt, radius=dist*1000, color="blue", weight=2, fill=False).add_to(m)
-        
         folium.Marker(pt, tooltip=f"Point {i+1}", icon=folium.Icon(color="blue", icon="map-marker")).add_to(m)
     
-    # CIBLE ESTIMÉE (Zone rouge)
-    # On dessine un cercle rouge de la taille de la marge d'erreur autour du point calculé
+    # CIBLE ESTIMÉE
+    # Cercle rouge représentant la zone de convergence
     folium.Circle(
         res, 
         radius=marge_actuelle*1000, 
         color="red", 
         fill=True, 
-        fill_opacity=0.3, 
-        popup="Zone Probable"
+        fill_opacity=0.4, 
+        popup="Zone Optimale"
     ).add_to(m)
     
     folium.Marker(res, icon=folium.Icon(color="red", icon="crosshairs", prefix="fa")).add_to(m)
