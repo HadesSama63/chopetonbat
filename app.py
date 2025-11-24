@@ -31,7 +31,7 @@ with col_logo:
    
     try:
         image = Image.open("hades.png") 
-        st.image(image, width=200) # ajuster la taille ici
+        st.image(image, width=500) # ajuster la taille ici
     except FileNotFoundError:
         st.error("Image non trouvée. Vérifie le nom du fichier.")
 
@@ -127,3 +127,4 @@ if st.button("LANCER LA TRIANGULATION"):
     else:
 
         st.warning("Veuillez remplir tous les champs.")
+
