@@ -4,6 +4,8 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 import math
+# J'ajoute cette ligne pour gérer les images
+from PIL import Image 
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Chope ton Bat", page_icon="🦇", layout="centered")
@@ -21,7 +23,22 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-st.title("🦇 Chope ton Bat")
+# --- EN-TÊTE AVEC LOGO ---
+# Je crée deux colonnes : une petite pour le logo, une grande pour le titre
+col_logo, col_title = st.columns([1, 4]) # Le [1, 4] définit la largeur relative
+
+with col_logo:
+   
+    try:
+        image = Image.open("hades.png") 
+        st.image(image, width=80) # ajuster la taille ici
+    except FileNotFoundError:
+        st.error("Image non trouvée. Vérifie le nom du fichier.")
+
+with col_title:
+    # Le titre s'affiche à côté de l'image
+    st.title("Chope ton Bat")
+
 st.markdown("### Système de Triangulation Tactique")
 
 # --- FONCTIONS ---
