@@ -4,13 +4,12 @@ from streamlit_folium import st_folium
 from geopy.geocoders import Nominatim
 from geopy.exc import GeocoderTimedOut
 import math
-# J'ajoute cette ligne pour gérer les images
-from PIL import Image 
+from PIL import Image
 
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Chope ton Bat", page_icon="🦇", layout="centered")
 
-# Style CSS pour faire "App Mobile"
+# Style CSS
 st.markdown("""
     <style>
     .stButton>button {
@@ -23,27 +22,32 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- EN-TÊTE AVEC LOGO ---
-# Je crée deux colonnes : une petite pour le logo, une grande pour le titre
-col_logo, col_title = st.columns([1, 4]) # Le [1, 4] définit la largeur relative
+# --- GESTION DE LA MÉMOIRE (SESSION STATE) ---
+# C'est ici qu'on empêche la carte de disparaître
+if 'resultat' not in st.session_state:
+    st.session_state.resultat = None
+if 'coords_points' not in st.session_state:
+    st.session_state.coords_points = None
+
+# --- EN-TÊTE ---
+col_logo, col_title = st.columns([1, 4])
 
 with col_logo:
-   
     try:
-        image = Image.open("hades.png") 
-        st.image(image, width=500) # ajuster la taille ici
+        # Assure-toi que le nom de l'image est exact sur GitHub (majuscules/minuscules)
+        image = Image.open("image_0.png") 
+        st.image(image, width=100)
     except FileNotFoundError:
-        st.error("Image non trouvée. Vérifie le nom du fichier.")
+        st.warning("Logo introuvable")
 
 with col_title:
-    # Le titre s'affiche à côté de l'image
     st.title("Chope ton Bat")
 
 st.markdown("### Système de Triangulation Tactique")
 
 # --- FONCTIONS ---
 def get_coords(address):
-    geolocator = Nominatim(user_agent="triangulation_app")
+    geolocator = Nominatim(user_agent="triangulation_app_hades")
     try:
         location = geolocator.geocode(address, timeout=10)
         if location:
@@ -54,7 +58,6 @@ def get_coords(address):
         return None
 
 def trilateration(p1, r1, p2, r2, p3, r3):
-    # Conversion simple et robuste
     def latlon_to_xyz(lat, lon):
         lat, lon = math.radians(lat), math.radians(lon)
         R = 6371
@@ -82,7 +85,7 @@ def trilateration(p1, r1, p2, r2, p3, r3):
 
     return xyz_to_latlon(x, y, z)
 
-# --- INTERFACE ---
+# --- FORMULAIRE ---
 col1, col2 = st.columns([3, 1])
 addr1 = col1.text_input("Adresse 1", placeholder="Ex: Tour Eiffel, Paris")
 dist1 = col2.number_input("Dist 1 (km)", min_value=0.0, format="%.2f")
@@ -95,6 +98,7 @@ col5, col6 = st.columns([3, 1])
 addr3 = col5.text_input("Adresse 3")
 dist3 = col6.number_input("Dist 3 (km)", min_value=0.0, format="%.2f")
 
+# --- ACTION ---
 if st.button("LANCER LA TRIANGULATION"):
     if addr1 and addr2 and addr3 and dist1 > 0 and dist2 > 0 and dist3 > 0:
         with st.spinner('Calcul des coordonnées...'):
@@ -103,28 +107,40 @@ if st.button("LANCER LA TRIANGULATION"):
             c3 = get_coords(addr3)
 
             if c1 and c2 and c3:
-                result = trilateration(c1, dist1, c2, dist2, c3, dist3)
+                # Calcul
+                final_pos = trilateration(c1, dist1, c2, dist2, c3, dist3)
                 
-                st.success(f"📍 Cible localisée : {result[0]:.5f}, {result[1]:.5f}")
-                
-                # Affichage Carte
-                m = folium.Map(location=result, zoom_start=13)
-                
-                # Cercles
-                folium.Circle(c1, radius=dist1*1000, color="green", fill=True, fill_opacity=0.1).add_to(m)
-                folium.Circle(c2, radius=dist2*1000, color="green", fill=True, fill_opacity=0.1).add_to(m)
-                folium.Circle(c3, radius=dist3*1000, color="green", fill=True, fill_opacity=0.1).add_to(m)
-                
-                # Marqueurs
-                folium.Marker(c1, tooltip="Point 1").add_to(m)
-                folium.Marker(c2, tooltip="Point 2").add_to(m)
-                folium.Marker(c3, tooltip="Point 3").add_to(m)
-                folium.Marker(result, icon=folium.Icon(color="red", icon="crosshairs", prefix="fa")).add_to(m)
-
-                st_folium(m, width=700)
+                # ON SAUVEGARDE TOUT DANS LA MÉMOIRE DE SESSION
+                st.session_state.resultat = final_pos
+                st.session_state.coords_points = [
+                    (c1, dist1),
+                    (c2, dist2),
+                    (c3, dist3)
+                ]
             else:
                 st.error("Impossible de trouver une des adresses.")
     else:
-
         st.warning("Veuillez remplir tous les champs.")
 
+# --- AFFICHAGE DU RÉSULTAT (En dehors du bouton !) ---
+# Si un résultat existe en mémoire, on l'affiche, même si la page recharge.
+if st.session_state.resultat is not None:
+    res = st.session_state.resultat
+    points = st.session_state.coords_points
+    
+    st.success(f"📍 Cible localisée : {res[0]:.5f}, {res[1]:.5f}")
+    
+    # Création de la carte
+    m = folium.Map(location=res, zoom_start=13)
+    
+    # Ajout des éléments
+    # Points et cercles
+    for i, (pt, dist) in enumerate(points):
+        folium.Circle(pt, radius=dist*1000, color="green", fill=True, fill_opacity=0.1).add_to(m)
+        folium.Marker(pt, tooltip=f"Point {i+1}").add_to(m)
+    
+    # Cible
+    folium.Marker(res, icon=folium.Icon(color="red", icon="crosshairs", prefix="fa")).add_to(m)
+
+    # Affichage final stable
+    st_folium(m, width=700)
